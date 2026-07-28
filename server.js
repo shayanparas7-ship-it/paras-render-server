@@ -3,256 +3,332 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
-const { v4: uuidv4 } = require('uuid');
 const { MsEdgeTTS, OUTPUT_FORMAT } = require('msedge-tts');
 
 const app = express();
-app.use(express.json({ limit: '20mb' }));
+app.use(express.json({ limit: '5mb' }));
 
 const TMP_DIR = path.join(__dirname, 'tmp');
 const OUTPUT_DIR = path.join(__dirname, 'public', 'output');
-const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+const INDEX_FILE = path.join(__dirname, 'public', 'index.json');
 fs.mkdirSync(TMP_DIR, { recursive: true });
 fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-const jobs = {}; // jobId -> { status, progress, videoUrl, error }
+const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
+const PEXELS_API_KEY = process.env.PEXELS_API_KEY || '';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+const CHANNEL_NAME = process.env.CHANNEL_NAME || 'Shayan Paras';
+const VOICE = process.env.TTS_VOICE || 'en-US-GuyNeural';
+
+// ---------- small helpers ----------
 
 function run(cmd, args) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 1024 * 1024 * 300 }, (err, stdout, stderr) => {
-      if (err) {
-        console.error(`ffmpeg error (${cmd} ${args.slice(0, 6).join(' ')}...):`, stderr);
-        return reject(new Error(stderr || err.message));
-      }
+    execFile(cmd, args, { maxBuffer: 1024 * 1024 * 200 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(stderr || err.message));
       resolve(stdout);
     });
   });
 }
 
-async function download(url, destPath) {
-  const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 60000 });
-  fs.writeFileSync(destPath, res.data);
-  return destPath;
+async function download(url, dest, headers = {}) {
+  const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 90000, headers });
+  fs.writeFileSync(dest, res.data);
+  return dest;
 }
 
-async function getDuration(filePath) {
-  const out = await run('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath]);
+async function getDuration(file) {
+  const out = await run('ffprobe', ['-v', 'error', '-show_entries', 'format=duration',
+    '-of', 'default=noprint_wrappers=1:nokey=1', file]);
   return parseFloat(out.trim());
 }
 
-async function generateNarration(text, outPath) {
+function esc(t) {
+  return String(t)
+    .replace(/\\/g, '\\\\')
+    .replace(/:/g, '\\:')
+    .replace(/'/g, "\u2019")   // curly apostrophe avoids ffmpeg quoting pain
+    .replace(/%/g, '\\%');
+}
+
+function readIndex() {
+  try { return JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); } catch { return []; }
+}
+function writeIndex(list) {
+  fs.writeFileSync(INDEX_FILE, JSON.stringify(list.slice(0, 60), null, 2));
+}
+
+// ---------- 1. the script ----------
+
+const FALLBACK_FACTS = [
+  { hook: "Your bones are stronger than steel", script: "Ounce for ounce, human bone is stronger than steel. A block of bone the size of a matchbox can support around nine tonnes. That is roughly four times what concrete can handle. The reason you still break bones is not weakness. It is that your skeleton trades some raw strength for being light enough to actually carry around.", keywords: ["human skeleton", "x-ray bone", "running athlete"] },
+  { hook: "There is a planet made of diamond", script: "Fifty light years from Earth sits a planet called fifty five Cancri e. It orbits so close to its star that its surface is molten. But underneath, the extreme pressure and carbon rich chemistry mean a large part of its interior may be crystallised into diamond. A planet worth more than every economy on Earth combined, and completely impossible to reach.", keywords: ["space planet", "diamond crystal", "galaxy stars"] },
+  { hook: "Bananas are radioactive", script: "Every banana you eat is slightly radioactive. Bananas are rich in potassium, and a small fraction of natural potassium is an unstable isotope that decays. The dose is so tiny it is harmless, but it is real enough that scientists jokingly measure radiation exposure in banana equivalent doses. You would need to eat roughly ten million bananas at once to be in danger.", keywords: ["bananas fruit", "science laboratory", "grocery store"] },
+  { hook: "Octopuses have three hearts", script: "An octopus has three hearts and blue blood. Two hearts pump blood to the gills, and one pumps it to the rest of the body. That third heart actually stops beating whenever the octopus swims, which is why they prefer crawling. Swimming exhausts them. Their blood is blue because it carries oxygen using copper instead of iron.", keywords: ["octopus underwater", "ocean deep sea", "marine life"] },
+  { hook: "A day on Venus is longer than its year", script: "Venus rotates so slowly that a single day there lasts about two hundred and forty three Earth days. But it orbits the sun in only two hundred and twenty five. That means on Venus, a day is longer than a year. And to make it stranger, Venus spins backwards, so the sun rises in the west and sets in the east.", keywords: ["venus planet", "solar system", "space nebula"] }
+];
+
+async function generateScript() {
+  if (!GEMINI_API_KEY) {
+    return FALLBACK_FACTS[Math.floor(Math.random() * FALLBACK_FACTS.length)];
+  }
+
+  const prompt = `Generate ONE mind-blowing "did you know" fact for a 35-second YouTube Short.
+Rules:
+- Must be genuinely surprising, true, and verifiable. No myths, no urban legends.
+- Avoid the most overused facts (honey never spoils, Cleopatra/pyramids, sharks older than trees).
+- Narration must be 80-95 words, written to be spoken aloud, plain conversational English.
+- Open with the single most surprising sentence. No "did you know" phrasing, no greetings.
+- End on a line that lands, not a question.
+Also give a short punchy on-screen hook (max 6 words) and 3 stock-footage search terms
+(simple, literal, visual - things a stock video site would actually have).
+Respond with ONLY raw JSON, no markdown, no backticks:
+{"hook":"...","script":"...","keywords":["...","...","..."]}`;
+
+  try {
+    const res = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      { contents: [{ parts: [{ text: prompt }] }] },
+      { timeout: 45000 }
+    );
+    let text = res.data.candidates[0].content.parts[0].text.trim();
+    text = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    const parsed = JSON.parse(text);
+    if (!parsed.script || !parsed.keywords?.length) throw new Error('bad shape');
+    return parsed;
+  } catch (e) {
+    console.error('Gemini failed, using fallback fact:', e.message);
+    return FALLBACK_FACTS[Math.floor(Math.random() * FALLBACK_FACTS.length)];
+  }
+}
+
+// ---------- 2. narration ----------
+
+async function narrate(text, outPath) {
   const tts = new MsEdgeTTS();
-  await tts.setMetadata('en-US-GuyNeural', OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+  await tts.setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
   const { audioStream } = await tts.toStream(text);
   await new Promise((resolve, reject) => {
-    const writer = fs.createWriteStream(outPath);
-    audioStream.pipe(writer);
-    writer.on('finish', resolve);
-    writer.on('error', reject);
+    const w = fs.createWriteStream(outPath);
+    audioStream.pipe(w);
+    w.on('finish', resolve);
+    w.on('error', reject);
+    audioStream.on('error', reject);
   });
-}
-
-async function generateImage(prompt, outPath) {
-  const encoded = encodeURIComponent(prompt);
-  const url = `https://image.pollinations.ai/prompt/${encoded}?width=1920&height=1080&nologo=true&seed=${Math.floor(Math.random() * 100000)}`;
-  await download(url, outPath);
-}
-
-function esc(t) {
-  return t.replace(/:/g, '\\:').replace(/'/g, "\\'");
-}
-
-function srtTs(s) {
-  const h = String(Math.floor(s / 3600)).padStart(2, '0');
-  const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
-  const sec = String(Math.floor(s % 60)).padStart(2, '0');
-  const ms = String(Math.round((s % 1) * 1000)).padStart(3, '0');
-  return `${h}:${m}:${sec},${ms}`;
-}
-
-// Build one scene's clip: splits its narration into ~13s image segments with alternating
-// zoom-in / pan-right Ken Burns motion, hard-cut between segments, then attaches the
-// scene's continuous narration audio on top.
-async function buildSceneClip(jobDir, sceneIdx, scene) {
-  const narrationPath = path.join(jobDir, `narration_${sceneIdx}.mp3`);
-  await generateNarration(scene.text, narrationPath);
-  const totalDuration = await getDuration(narrationPath);
-
-  const targetSeg = 13;
-  const segCount = Math.max(1, Math.round(totalDuration / targetSeg));
-  const segDuration = totalDuration / segCount;
-  const fps = 25;
-
-  const segClips = [];
-  for (let s = 0; s < segCount; s++) {
-    const variant = s % 2;
-    const imgPath = path.join(jobDir, `img_${sceneIdx}_${s}.jpg`);
-    const suffix = variant === 0 ? ', wide establishing shot' : ', close detail shot';
-    await generateImage(scene.imagePrompt + suffix, imgPath);
-
-    const frames = Math.max(1, Math.round(segDuration * fps));
-    const zoompan = variant === 0
-      ? `zoompan=z='min(zoom+0.0012,1.25)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=1920x1080:fps=${fps}`
-      : `zoompan=z='1.15':x='if(lte(on,1),(iw-iw/1.15)/2,x+0.7)':y='(ih-ih/1.15)/2':d=${frames}:s=1920x1080:fps=${fps}`;
-
-    const segClip = path.join(jobDir, `seg_${sceneIdx}_${s}.mp4`);
-    await run('ffmpeg', [
-      '-y', '-loop', '1', '-i', imgPath,
-      '-vf', `scale=2200:-1,${zoompan},format=yuv420p`,
-      '-t', String(segDuration), '-r', String(fps),
-      segClip
-    ]);
-    segClips.push(segClip);
-  }
-
-  const listFile = path.join(jobDir, `seglist_${sceneIdx}.txt`);
-  fs.writeFileSync(listFile, segClips.map(p => `file '${p}'`).join('\n'));
-  const silentScene = path.join(jobDir, `silent_scene_${sceneIdx}.mp4`);
-  await run('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', silentScene]);
-
-  const sceneClip = path.join(jobDir, `scene_${sceneIdx}.mp4`);
-  await run('ffmpeg', ['-y', '-i', silentScene, '-i', narrationPath, '-c:v', 'copy', '-c:a', 'aac', '-shortest', sceneClip]);
-
-  return { path: sceneClip, duration: totalDuration };
-}
-
-// Chain scene clips together with a real crossfade dissolve (video + audio) between each.
-async function crossfadeChain(jobDir, clips, transition = 0.6) {
-  if (clips.length === 1) return clips[0].path;
-
-  let inputs = [];
-  let filterParts = [];
-  let cumulative = clips[0].duration;
-  let lastV = '0:v';
-  let lastA = '0:a';
-
-  clips.forEach(c => inputs.push('-i', c.path));
-
-  for (let i = 1; i < clips.length; i++) {
-    const offset = Math.max(0, cumulative - transition);
-    const outV = `v${i}`;
-    const outA = `a${i}`;
-    filterParts.push(`[${lastV}][${i}:v]xfade=transition=fade:duration=${transition}:offset=${offset.toFixed(2)}[${outV}]`);
-    filterParts.push(`[${lastA}][${i}:a]acrossfade=d=${transition}[${outA}]`);
-    lastV = outV;
-    lastA = outA;
-    cumulative = cumulative + clips[i].duration - transition;
-  }
-
-  const outPath = path.join(jobDir, 'chained.mp4');
-  await run('ffmpeg', [
-    '-y', ...inputs,
-    '-filter_complex', filterParts.join(';'),
-    '-map', `[${lastV}]`, '-map', `[${lastA}]`,
-    '-c:v', 'libx264', '-preset', 'fast', '-crf', '21', '-c:a', 'aac',
-    outPath
-  ]);
   return outPath;
 }
 
-async function processJob(jobId, payload) {
-  const jobDir = path.join(TMP_DIR, jobId);
+// ---------- 3. stock footage ----------
+
+async function fetchStockClips(keywords, count, jobDir) {
+  if (!PEXELS_API_KEY) throw new Error('PEXELS_API_KEY is not set on the server');
+
+  const collected = [];
+  let ki = 0;
+
+  while (collected.length < count && ki < keywords.length * 3) {
+    const term = keywords[ki % keywords.length];
+    ki++;
+    try {
+      const res = await axios.get('https://api.pexels.com/videos/search', {
+        headers: { Authorization: PEXELS_API_KEY },
+        params: { query: term, orientation: 'portrait', per_page: 8, size: 'medium' },
+        timeout: 30000
+      });
+      const vids = res.data.videos || [];
+      for (const v of vids) {
+        if (collected.length >= count) break;
+        if (collected.find(c => c.id === v.id)) continue;
+        const file = (v.video_files || [])
+          .filter(f => f.file_type === 'video/mp4')
+          .sort((a, b) => (b.height || 0) - (a.height || 0))[0];
+        if (file) collected.push({ id: v.id, url: file.link });
+      }
+    } catch (e) {
+      console.error(`Pexels search failed for "${term}":`, e.message);
+    }
+  }
+
+  if (!collected.length) throw new Error('No stock footage found for: ' + keywords.join(', '));
+
+  // if we found fewer than needed, cycle through what we have
+  const paths = [];
+  for (let i = 0; i < count; i++) {
+    const src = collected[i % collected.length];
+    const dest = path.join(jobDir, `stock_${i}.mp4`);
+    if (i < collected.length) {
+      await download(src.url, dest);
+    } else {
+      fs.copyFileSync(path.join(jobDir, `stock_${i % collected.length}.mp4`), dest);
+    }
+    paths.push(dest);
+  }
+  return paths;
+}
+
+// ---------- 4. captions ----------
+
+// Split narration into small on-screen chunks and spread them evenly across the audio.
+function buildCaptionChunks(script, totalDuration, wordsPerChunk = 3) {
+  const words = script.split(/\s+/).filter(Boolean);
+  const chunks = [];
+  for (let i = 0; i < words.length; i += wordsPerChunk) {
+    chunks.push(words.slice(i, i + wordsPerChunk).join(' '));
+  }
+  const per = totalDuration / chunks.length;
+  return chunks.map((text, i) => ({
+    text,
+    start: i * per,
+    end: (i + 1) * per
+  }));
+}
+
+// ---------- 5. build the video ----------
+
+async function buildShort() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const jobDir = path.join(TMP_DIR, stamp);
   fs.mkdirSync(jobDir, { recursive: true });
 
   try {
-    const {
-      scenes,
-      channelName = 'Shayan Paras',
-      ctaText = 'Subscribe & hit the bell',
-      ctaSceneIndexes = [],
-      titleSceneIndexes = [],
-      outroSceneIndexes = []
-    } = payload;
+    const fact = await generateScript();
 
-    const clips = [];
-    for (let i = 0; i < scenes.length; i++) {
-      jobs[jobId].progress = `Building scene ${i + 1}/${scenes.length}`;
-      clips.push(await buildSceneClip(jobDir, i, scenes[i]));
+    const narrationPath = path.join(jobDir, 'narration.mp3');
+    await narrate(fact.script, narrationPath);
+    const duration = await getDuration(narrationPath);
+
+    const segLen = 4;
+    const segCount = Math.max(2, Math.ceil(duration / segLen));
+    const stockPaths = await fetchStockClips(fact.keywords, segCount, jobDir);
+
+    // normalise each clip: vertical 1080x1920, silent, fixed length
+    const segPaths = [];
+    const actualSeg = duration / segCount;
+    for (let i = 0; i < stockPaths.length; i++) {
+      const out = path.join(jobDir, `seg_${i}.mp4`);
+      await run('ffmpeg', [
+        '-y', '-i', stockPaths[i],
+        '-t', String(actualSeg),
+        '-an',
+        '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30',
+        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+        out
+      ]);
+      segPaths.push(out);
     }
 
-    jobs[jobId].progress = 'Crossfading scenes together';
-    const chained = await crossfadeChain(jobDir, clips);
-    const totalDuration = await getDuration(chained);
+    const listFile = path.join(jobDir, 'list.txt');
+    fs.writeFileSync(listFile, segPaths.map(p => `file '${p}'`).join('\n'));
+    const stitched = path.join(jobDir, 'stitched.mp4');
+    await run('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', stitched]);
 
-    jobs[jobId].progress = 'Adding ambient background bed';
-    const ambientPath = path.join(jobDir, 'ambient.wav');
-    await run('ffmpeg', [
-      '-y', '-f', 'lavfi', '-i', `anoisesrc=color=brown:duration=${totalDuration}:sample_rate=44100`,
-      '-af', 'lowpass=f=400,volume=0.05',
-      ambientPath
-    ]);
-    const withAmbient = path.join(jobDir, 'with_ambient.mp4');
-    await run('ffmpeg', [
-      '-y', '-i', chained, '-i', ambientPath,
-      '-filter_complex', '[0:a]volume=1.0[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]',
-      '-map', '0:v', '-map', '[aout]', '-c:v', 'copy', '-c:a', 'aac',
-      withAmbient
-    ]);
+    // captions + hook + channel tag
+    const chunks = buildCaptionChunks(fact.script, duration);
+    const FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+    const filters = [];
 
-    jobs[jobId].progress = 'Building captions and overlays';
-    const srtLines = [];
-    let cursor = 0;
-    for (let i = 0; i < clips.length; i++) {
-      srtLines.push(`${i + 1}\n${srtTs(cursor)} --> ${srtTs(cursor + clips[i].duration)}\n${scenes[i].text.slice(0, 140)}\n`);
-      cursor += clips[i].duration;
-    }
-    const srtPath = path.join(jobDir, 'captions.srt');
-    fs.writeFileSync(srtPath, srtLines.join('\n'));
+    filters.push(`drawtext=fontfile=${FONT}:text='${esc(fact.hook.toUpperCase())}':fontcolor=white:fontsize=76:borderw=6:bordercolor=black:x=(w-tw)/2:y=220:enable='between(t,0,2.5)'`);
 
-    const filters = [
-      `eq=contrast=1.05:saturation=1.1`,
-      `vignette=PI/4`,
-      `drawtext=text='${esc(channelName)}':fontcolor=white@0.85:fontsize=28:box=1:boxcolor=black@0.35:boxborderw=8:x=w-tw-30:y=h-th-30`,
-      `subtitles='${srtPath.replace(/:/g, '\\:')}':force_style='FontSize=20,PrimaryColour=&HFFFFFF&'`
-    ];
-
-    cursor = 0;
-    for (let i = 0; i < clips.length; i++) {
-      const start = cursor;
-      const end = cursor + clips[i].duration;
-      if (ctaSceneIndexes.includes(i)) {
-        filters.push(`drawtext=text='${esc(ctaText)}':fontcolor=white:fontsize=36:box=1:boxcolor=black@0.5:boxborderw=12:x=(w-tw)/2:y=h-th-80:enable='between(t,${(start + 2).toFixed(2)},${(start + 8).toFixed(2)})'`);
-      }
-      if (titleSceneIndexes.includes(i)) {
-        filters.push(`drawtext=text='${esc(channelName.toUpperCase())}':fontcolor=white:fontsize=64:box=1:boxcolor=black@0.4:boxborderw=16:x=(w-tw)/2:y=(h-th)/2:enable='between(t,${start.toFixed(2)},${end.toFixed(2)})'`);
-      }
-      if (outroSceneIndexes.includes(i)) {
-        filters.push(`drawtext=text='Subscribe for more true stories':fontcolor=white:fontsize=44:box=1:boxcolor=black@0.5:boxborderw=14:x=(w-tw)/2:y=(h-th)/2:enable='between(t,${start.toFixed(2)},${end.toFixed(2)})'`);
-      }
-      cursor = end;
+    for (const c of chunks) {
+      filters.push(
+        `drawtext=fontfile=${FONT}:text='${esc(c.text.toUpperCase())}':fontcolor=white:fontsize=72:borderw=7:bordercolor=black:x=(w-tw)/2:y=h-620:enable='between(t,${c.start.toFixed(2)},${c.end.toFixed(2)})'`
+      );
     }
 
-    const finalPath = path.join(OUTPUT_DIR, `${jobId}.mp4`);
+    filters.push(`drawtext=fontfile=${FONT}:text='${esc(CHANNEL_NAME)}':fontcolor=white@0.8:fontsize=38:borderw=3:bordercolor=black:x=(w-tw)/2:y=h-160`);
+
+    const finalName = `short_${stamp}.mp4`;
+    const finalPath = path.join(OUTPUT_DIR, finalName);
     await run('ffmpeg', [
-      '-y', '-i', withAmbient,
+      '-y', '-i', stitched, '-i', narrationPath,
       '-vf', filters.join(','),
-      '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-c:a', 'copy',
+      '-map', '0:v', '-map', '1:a',
+      '-c:v', 'libx264', '-preset', 'medium', '-crf', '21',
+      '-c:a', 'aac', '-b:a', '192k',
+      '-shortest',
       finalPath
     ]);
 
     fs.rmSync(jobDir, { recursive: true, force: true });
-    jobs[jobId] = { status: 'done', progress: 'Complete', videoUrl: `${BASE_URL}/output/${jobId}.mp4` };
+
+    const entry = {
+      file: finalName,
+      url: `${BASE_URL}/output/${finalName}`,
+      hook: fact.hook,
+      script: fact.script,
+      keywords: fact.keywords,
+      duration: Math.round(duration),
+      createdAt: new Date().toISOString()
+    };
+    const index = readIndex();
+    index.unshift(entry);
+    writeIndex(index);
+    return entry;
   } catch (err) {
-    console.error('Job failed:', err);
-    jobs[jobId] = { status: 'error', progress: null, error: err.message };
+    fs.rmSync(jobDir, { recursive: true, force: true });
+    throw err;
   }
 }
 
-app.post('/render-full', (req, res) => {
-  const jobId = uuidv4();
-  jobs[jobId] = { status: 'processing', progress: 'Starting' };
-  processJob(jobId, req.body);
-  res.json({ jobId, statusUrl: `${BASE_URL}/status/${jobId}` });
+// ---------- routes ----------
+
+let building = false;
+
+app.get('/make-short', async (req, res) => {
+  if (building) return res.status(429).json({ error: 'A video is already being built. Try again shortly.' });
+  building = true;
+  try {
+    const entry = await buildShort();
+    res.json({ ok: true, ...entry });
+  } catch (err) {
+    console.error('Build failed:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  } finally {
+    building = false;
+  }
 });
 
-app.get('/status/:jobId', (req, res) => {
-  const job = jobs[req.params.jobId];
-  if (!job) return res.status(404).json({ error: 'Job not found' });
-  res.json(job);
+app.get('/api/videos', (req, res) => res.json(readIndex()));
+
+app.get('/', (req, res) => {
+  const videos = readIndex();
+  const cards = videos.map(v => `
+    <div class="card">
+      <video src="${v.url}" controls preload="metadata"></video>
+      <div class="meta">
+        <h2>${v.hook}</h2>
+        <p class="date">${new Date(v.createdAt).toLocaleString()} &middot; ${v.duration}s</p>
+        <p class="script">${v.script}</p>
+        <a class="dl" href="${v.url}" download>Download</a>
+      </div>
+    </div>`).join('');
+
+  res.send(`<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${CHANNEL_NAME} — Daily Shorts</title>
+<style>
+  body{margin:0;background:#0e0e10;color:#eee;font-family:system-ui,-apple-system,sans-serif;padding:24px}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:#888;font-size:14px;margin-bottom:24px}
+  .card{display:flex;gap:20px;background:#18181b;border-radius:14px;padding:16px;margin-bottom:20px;flex-wrap:wrap}
+  video{width:220px;border-radius:10px;background:#000}
+  .meta{flex:1;min-width:240px}
+  .meta h2{font-size:18px;margin:0 0 6px}
+  .date{color:#888;font-size:13px;margin:0 0 10px}
+  .script{color:#ccc;font-size:14px;line-height:1.5}
+  .dl{display:inline-block;margin-top:12px;background:#e11d48;color:#fff;text-decoration:none;padding:9px 18px;border-radius:8px;font-size:14px}
+  .empty{color:#888}
+  button{background:#27272a;color:#eee;border:0;padding:10px 18px;border-radius:8px;cursor:pointer;font-size:14px}
+</style></head><body>
+<h1>${CHANNEL_NAME} — Daily Shorts</h1>
+<p class="sub">A new short is generated automatically each day. Download and post.</p>
+<button onclick="this.textContent='Building… this takes 1-3 min';fetch('/make-short').then(r=>r.json()).then(()=>location.reload()).catch(()=>location.reload())">Make one now</button>
+<div style="height:20px"></div>
+${cards || '<p class="empty">No videos yet. Press “Make one now” to generate the first one.</p>'}
+</body></html>`);
 });
 
 app.use('/output', express.static(OUTPUT_DIR));
-app.get('/', (req, res) => res.send('Paras render server is running.'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Render server listening on port ${PORT}`));
+app.listen(PORT, () => console.log(`Shorts server running on ${PORT}`));
