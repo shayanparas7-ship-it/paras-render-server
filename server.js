@@ -32,8 +32,14 @@ function run(cmd, args) {
 }
 
 async function download(url, dest, headers = {}) {
-  const res = await axios.get(url, { responseType: 'arraybuffer', timeout: 90000, headers });
-  fs.writeFileSync(dest, res.data);
+  const res = await axios.get(url, { responseType: 'stream', timeout: 90000, headers });
+  await new Promise((resolve, reject) => {
+    const writer = fs.createWriteStream(dest);
+    res.data.pipe(writer);
+    writer.on('finish', resolve);
+    writer.on('error', reject);
+    res.data.on('error', reject);
+  });
   return dest;
 }
 
@@ -210,8 +216,8 @@ async function buildShort() {
         '-y', '-i', stockPaths[i],
         '-t', String(actualSeg),
         '-an',
-        '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=30',
-        '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23',
+        '-vf', 'scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=30',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-threads', '1',
         out
       ]);
       segPaths.push(out);
@@ -243,8 +249,8 @@ async function buildShort() {
       '-y', '-i', stitched, '-i', narrationPath,
       '-vf', filters.join(','),
       '-map', '0:v', '-map', '1:a',
-      '-c:v', 'libx264', '-preset', 'medium', '-crf', '21',
-      '-c:a', 'aac', '-b:a', '192k',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '24', '-threads', '1',
+      '-c:a', 'aac', '-b:a', '160k',
       '-shortest',
       finalPath
     ]);
