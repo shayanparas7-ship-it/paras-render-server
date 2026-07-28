@@ -18,7 +18,7 @@ const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 const PEXELS_API_KEY = process.env.PEXELS_API_KEY || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const CHANNEL_NAME = process.env.CHANNEL_NAME || 'Shayan Paras';
-const VOICE = process.env.TTS_VOICE || 'en-US-GuyNeural';
+const VOICE = process.env.TTS_VOICE || 'en-US-AndrewNeural';
 
 // ---------- small helpers ----------
 
@@ -66,30 +66,51 @@ function writeIndex(list) {
 
 // ---------- 1. the script ----------
 
-const FALLBACK_FACTS = [
-  { hook: "Your bones are stronger than steel", script: "Ounce for ounce, human bone is stronger than steel. A block of bone the size of a matchbox can support around nine tonnes. That is roughly four times what concrete can handle. The reason you still break bones is not weakness. It is that your skeleton trades some raw strength for being light enough to actually carry around.", keywords: ["human skeleton", "x-ray bone", "running athlete"] },
-  { hook: "There is a planet made of diamond", script: "Fifty light years from Earth sits a planet called fifty five Cancri e. It orbits so close to its star that its surface is molten. But underneath, the extreme pressure and carbon rich chemistry mean a large part of its interior may be crystallised into diamond. A planet worth more than every economy on Earth combined, and completely impossible to reach.", keywords: ["space planet", "diamond crystal", "galaxy stars"] },
-  { hook: "Bananas are radioactive", script: "Every banana you eat is slightly radioactive. Bananas are rich in potassium, and a small fraction of natural potassium is an unstable isotope that decays. The dose is so tiny it is harmless, but it is real enough that scientists jokingly measure radiation exposure in banana equivalent doses. You would need to eat roughly ten million bananas at once to be in danger.", keywords: ["bananas fruit", "science laboratory", "grocery store"] },
-  { hook: "Octopuses have three hearts", script: "An octopus has three hearts and blue blood. Two hearts pump blood to the gills, and one pumps it to the rest of the body. That third heart actually stops beating whenever the octopus swims, which is why they prefer crawling. Swimming exhausts them. Their blood is blue because it carries oxygen using copper instead of iron.", keywords: ["octopus underwater", "ocean deep sea", "marine life"] },
-  { hook: "A day on Venus is longer than its year", script: "Venus rotates so slowly that a single day there lasts about two hundred and forty three Earth days. But it orbits the sun in only two hundred and twenty five. That means on Venus, a day is longer than a year. And to make it stranger, Venus spins backwards, so the sun rises in the west and sets in the east.", keywords: ["venus planet", "solar system", "space nebula"] }
+const FALLBACK_STORIES = [
+  {
+    hook: "The Knock",
+    beats: [
+      { text: "The knock came at 2 AM, three soft taps, exactly like she used to knock.", imagePrompt: "dark hallway at night, single wooden door, faint knock vibration, eerie illustrated horror art style, muted deep blue and black palette, moody lighting, digital painting" },
+      { text: "I hadn't spoken to my sister in five years.", imagePrompt: "lonely figure standing at a doorway at night, silhouette, illustrated horror art style, cold blue tones, digital painting" },
+      { text: "I opened the door anyway.", imagePrompt: "door slowly opening into darkness, illustrated horror art style, high contrast shadows, digital painting" },
+      { text: "No one was there.", imagePrompt: "empty dark porch at night, illustrated horror art style, unsettling emptiness, digital painting" },
+      { text: "Just her scarf, folded neatly on the mat, the one she was buried in.", imagePrompt: "folded scarf on a doormat at night, close up, illustrated horror art style, eerie detail, digital painting" },
+      { text: "I brought it inside without thinking.", imagePrompt: "hand reaching to pick up a scarf, dim interior light, illustrated horror art style, digital painting" },
+      { text: "That night I heard three soft taps again, from inside my closet.", imagePrompt: "closet door in a dark bedroom, faint light under the door, illustrated horror art style, tense atmosphere, digital painting" },
+      { text: "I still haven't opened it.", imagePrompt: "closed closet door, shadows creeping at the edges, illustrated horror art style, digital painting" },
+      { text: "But every night, at 2 AM, the knocking gets a little closer to the bedroom door.", imagePrompt: "bedroom door at night, ominous shadow beneath it, illustrated horror art style, dread atmosphere, digital painting" }
+    ]
+  },
+  {
+    hook: "The Playback",
+    beats: [
+      { text: "I found an old voice recorder in my dad's things after he passed.", imagePrompt: "old cassette voice recorder among dusty belongings, illustrated horror art style, warm dim light fading to shadow, digital painting" },
+      { text: "One tape was labeled with just tonight's date, from ten years ago.", imagePrompt: "handwritten label on a cassette tape, close up, illustrated horror art style, unsettling detail, digital painting" },
+      { text: "I pressed play, expecting his voice.", imagePrompt: "finger pressing play button on old recorder, tense close up, illustrated horror art style, digital painting" },
+      { text: "Instead, I heard my own voice, calm, whispering things I haven't said yet.", imagePrompt: "person listening in shock in a dim room, illustrated horror art style, cold color palette, digital painting" },
+      { text: "It described this exact room, this exact chair, word for word.", imagePrompt: "empty chair in a dim room, illustrated horror art style, eerie symmetry, digital painting" },
+      { text: "Then it said my name, and told me to turn around.", imagePrompt: "silhouette frozen mid turn in a dark room, illustrated horror art style, high tension, digital painting" },
+      { text: "I didn't.", imagePrompt: "back of a person's head, unmoving, dark room, illustrated horror art style, digital painting" },
+      { text: "The tape ended there.", imagePrompt: "cassette player stopped, small red light glowing, illustrated horror art style, digital painting" },
+      { text: "I still haven't turned around, and the recorder, somehow, is still running.", imagePrompt: "cassette recorder still spinning with no tape moving, ominous glow, illustrated horror art style, dread, digital painting" }
+    ]
+  }
 ];
 
-async function generateScript() {
+async function generateStory() {
   if (!GEMINI_API_KEY) {
-    return FALLBACK_FACTS[Math.floor(Math.random() * FALLBACK_FACTS.length)];
+    return FALLBACK_STORIES[Math.floor(Math.random() * FALLBACK_STORIES.length)];
   }
 
-  const prompt = `Generate ONE mind-blowing "did you know" fact for a 35-second YouTube Short.
+  const prompt = `Write ONE original short horror story for a 35-45 second narrated video.
 Rules:
-- Must be genuinely surprising, true, and verifiable. No myths, no urban legends.
-- Avoid the most overused facts (honey never spoils, Cleopatra/pyramids, sharks older than trees).
-- Narration must be 80-95 words, written to be spoken aloud, plain conversational English.
-- Open with the single most surprising sentence. No "did you know" phrasing, no greetings.
-- End on a line that lands, not a question.
-Also give a short punchy on-screen hook (max 6 words) and 3 stock-footage search terms
-(simple, literal, visual - things a stock video site would actually have).
+- Tight, atmospheric, first-person, told plainly like a true creepypasta account, not campy.
+- Must build dread steadily and land on a genuinely unsettling final line - no jump-scare cliches, no "and then I woke up", no demons/exorcism tropes. Something quiet and wrong.
+- Total narration 90-110 words, broken into 8-10 short beats (one or two sentences each).
+- For each beat, also give a matching illustrated-horror-art image prompt describing ONLY the visual (setting, framing, mood, lighting) - never describe gore, never depict a real person, keep it suggestive and atmospheric, always end each image prompt with ", illustrated horror art style, digital painting".
+- Also give a short punchy title (max 4 words).
 Respond with ONLY raw JSON, no markdown, no backticks:
-{"hook":"...","script":"...","keywords":["...","...","..."]}`;
+{"hook":"...","beats":[{"text":"...","imagePrompt":"..."}, ...]}`;
 
   try {
     const res = await axios.post(
@@ -100,11 +121,11 @@ Respond with ONLY raw JSON, no markdown, no backticks:
     let text = res.data.candidates[0].content.parts[0].text.trim();
     text = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
     const parsed = JSON.parse(text);
-    if (!parsed.script || !parsed.keywords?.length) throw new Error('bad shape');
+    if (!parsed.beats?.length) throw new Error('bad shape');
     return parsed;
   } catch (e) {
-    console.error('Gemini failed, using fallback fact:', e.message);
-    return FALLBACK_FACTS[Math.floor(Math.random() * FALLBACK_FACTS.length)];
+    console.error('Gemini failed, using fallback story:', e.message);
+    return FALLBACK_STORIES[Math.floor(Math.random() * FALLBACK_STORIES.length)];
   }
 }
 
@@ -124,130 +145,132 @@ async function narrate(text, outPath) {
   return outPath;
 }
 
-// ---------- 3. stock footage ----------
+// ---------- 3. illustrated visuals ----------
 
-async function fetchStockClips(keywords, count, jobDir) {
-  if (!PEXELS_API_KEY) throw new Error('PEXELS_API_KEY is not set on the server');
-
-  const collected = [];
-  let ki = 0;
-
-  while (collected.length < count && ki < keywords.length * 3) {
-    const term = keywords[ki % keywords.length];
-    ki++;
-    try {
-      const res = await axios.get('https://api.pexels.com/videos/search', {
-        headers: { Authorization: PEXELS_API_KEY },
-        params: { query: term, orientation: 'portrait', per_page: 8, size: 'medium' },
-        timeout: 30000
-      });
-      const vids = res.data.videos || [];
-      for (const v of vids) {
-        if (collected.length >= count) break;
-        if (collected.find(c => c.id === v.id)) continue;
-        const file = (v.video_files || [])
-          .filter(f => f.file_type === 'video/mp4')
-          .sort((a, b) => (b.height || 0) - (a.height || 0))[0];
-        if (file) collected.push({ id: v.id, url: file.link });
-      }
-    } catch (e) {
-      console.error(`Pexels search failed for "${term}":`, e.message);
-    }
-  }
-
-  if (!collected.length) throw new Error('No stock footage found for: ' + keywords.join(', '));
-
-  // if we found fewer than needed, cycle through what we have
-  const paths = [];
-  for (let i = 0; i < count; i++) {
-    const src = collected[i % collected.length];
-    const dest = path.join(jobDir, `stock_${i}.mp4`);
-    if (i < collected.length) {
-      await download(src.url, dest);
-    } else {
-      fs.copyFileSync(path.join(jobDir, `stock_${i % collected.length}.mp4`), dest);
-    }
-    paths.push(dest);
-  }
-  return paths;
+async function generateImage(prompt, destPath) {
+  const encoded = encodeURIComponent(prompt);
+  const url = `https://image.pollinations.ai/prompt/${encoded}?width=720&height=1280&nologo=true&seed=${Math.floor(Math.random() * 100000)}`;
+  await download(url, destPath);
 }
 
 // ---------- 4. captions ----------
 
-// Split narration into small on-screen chunks and spread them evenly across the audio.
-function buildCaptionChunks(script, totalDuration, wordsPerChunk = 3) {
+// Split narration into small on-screen chunks, timed proportionally to how many
+// characters each chunk has (longer words/phrases get more on-screen time), which
+// tracks natural speech pacing far better than dividing time equally per chunk.
+function buildCaptionChunks(script, totalDuration, wordsPerChunk = 1) {
   const words = script.split(/\s+/).filter(Boolean);
-  const chunks = [];
+  const chunkTexts = [];
   for (let i = 0; i < words.length; i += wordsPerChunk) {
-    chunks.push(words.slice(i, i + wordsPerChunk).join(' '));
+    chunkTexts.push(words.slice(i, i + wordsPerChunk).join(' '));
   }
-  const per = totalDuration / chunks.length;
-  return chunks.map((text, i) => ({
-    text,
-    start: i * per,
-    end: (i + 1) * per
-  }));
+  const weights = chunkTexts.map(t => Math.max(3, t.length));
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+
+  const chunks = [];
+  let cursor = 0;
+  for (let i = 0; i < chunkTexts.length; i++) {
+    const dur = (weights[i] / totalWeight) * totalDuration;
+    chunks.push({ text: chunkTexts[i], start: cursor, end: cursor + dur });
+    cursor += dur;
+  }
+  return chunks;
 }
 
 // ---------- 5. build the video ----------
 
-async function buildShort() {
+async function buildShort(jobId) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const jobDir = path.join(TMP_DIR, stamp);
   fs.mkdirSync(jobDir, { recursive: true });
 
   try {
-    const fact = await generateScript();
+    jobs[jobId].progress = 'Writing the story';
+    const story = await generateStory();
+    const fullScript = story.beats.map(b => b.text).join(' ');
 
+    jobs[jobId].progress = 'Recording narration';
     const narrationPath = path.join(jobDir, 'narration.mp3');
-    await narrate(fact.script, narrationPath);
+    await narrate(fullScript, narrationPath);
     const duration = await getDuration(narrationPath);
 
-    const segLen = 4;
-    const segCount = Math.max(2, Math.ceil(duration / segLen));
-    const stockPaths = await fetchStockClips(fact.keywords, segCount, jobDir);
+    // Time each beat's on-screen image proportionally to how much of the
+    // narration it represents, so visuals change exactly on story beats.
+    const weights = story.beats.map(b => Math.max(4, b.text.length));
+    const totalWeight = weights.reduce((a, b) => a + b, 0);
+    let cursor = 0;
+    const beatTimings = story.beats.map((b, i) => {
+      const dur = (weights[i] / totalWeight) * duration;
+      const timing = { ...b, start: cursor, dur };
+      cursor += dur;
+      return timing;
+    });
 
-    // normalise each clip: vertical 1080x1920, silent, fixed length
+    jobs[jobId].progress = 'Illustrating the scene';
     const segPaths = [];
-    const actualSeg = duration / segCount;
-    for (let i = 0; i < stockPaths.length; i++) {
+    for (let i = 0; i < beatTimings.length; i++) {
+      const imgPath = path.join(jobDir, `img_${i}.jpg`);
+      await generateImage(beatTimings[i].imagePrompt, imgPath);
+
+      const dur = Math.max(0.6, beatTimings[i].dur);
+      const fps = 25;
+      const frames = Math.max(1, Math.round(dur * fps));
+      const variant = i % 2;
+      const zoompan = variant === 0
+        ? `zoompan=z='min(zoom+0.0011,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=${fps}`
+        : `zoompan=z='if(lte(on,1),1.18,max(1.0,zoom-0.0011))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=${fps}`;
+
       const out = path.join(jobDir, `seg_${i}.mp4`);
       await run('ffmpeg', [
-        '-y', '-i', stockPaths[i],
-        '-t', String(actualSeg),
-        '-an',
-        '-vf', 'scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,fps=30',
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-threads', '1',
+        '-y', '-loop', '1', '-i', imgPath,
+        '-vf', `scale=900:-1,${zoompan},eq=contrast=1.08:saturation=0.85:brightness=-0.03,format=yuv420p`,
+        '-t', String(dur), '-r', String(fps),
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25', '-threads', '1',
         out
       ]);
       segPaths.push(out);
     }
 
+    jobs[jobId].progress = 'Stitching the scenes';
     const listFile = path.join(jobDir, 'list.txt');
     fs.writeFileSync(listFile, segPaths.map(p => `file '${p}'`).join('\n'));
     const stitched = path.join(jobDir, 'stitched.mp4');
     await run('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', stitched]);
 
-    // captions + hook + channel tag
-    const chunks = buildCaptionChunks(fact.script, duration);
+    // captions: small, understated, sitting a little below center - never the focus
+    jobs[jobId].progress = 'Adding captions';
+    const chunks = buildCaptionChunks(fullScript, duration, 3);
     const FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
     const filters = [];
 
-    filters.push(`drawtext=fontfile=${FONT}:text='${esc(fact.hook.toUpperCase())}':fontcolor=white:fontsize=76:borderw=6:bordercolor=black:x=(w-tw)/2:y=220:enable='between(t,0,2.5)'`);
+    filters.push(`drawtext=fontfile=${FONT}:text='${esc(story.hook.toUpperCase())}':fontcolor=white@0.9:fontsize=40:borderw=3:bordercolor=black:x=(w-tw)/2:y=140:enable='between(t,0,2.2)'`);
 
     for (const c of chunks) {
       filters.push(
-        `drawtext=fontfile=${FONT}:text='${esc(c.text.toUpperCase())}':fontcolor=white:fontsize=72:borderw=7:bordercolor=black:x=(w-tw)/2:y=h-620:enable='between(t,${c.start.toFixed(2)},${c.end.toFixed(2)})'`
+        `drawtext=fontfile=${FONT}:text='${esc(c.text)}':fontcolor=white@0.85:fontsize=30:borderw=2:bordercolor=black:x=(w-tw)/2:y=h/2+140:enable='between(t,${c.start.toFixed(2)},${c.end.toFixed(2)})'`
       );
     }
 
-    filters.push(`drawtext=fontfile=${FONT}:text='${esc(CHANNEL_NAME)}':fontcolor=white@0.8:fontsize=38:borderw=3:bordercolor=black:x=(w-tw)/2:y=h-160`);
+    jobs[jobId].progress = 'Building the dread (audio)';
+    const pulsePath = path.join(jobDir, 'pulse.wav');
+    await run('ffmpeg', [
+      '-y', '-f', 'lavfi', '-i', `sine=frequency=60:duration=${duration}`,
+      '-af', 'tremolo=f=1.4:d=0.75,volume=0.055',
+      pulsePath
+    ]);
+    const mixedAudio = path.join(jobDir, 'mixed.mp3');
+    await run('ffmpeg', [
+      '-y', '-i', narrationPath, '-i', pulsePath,
+      '-filter_complex', '[0:a]volume=1.0[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first[aout]',
+      '-map', '[aout]',
+      mixedAudio
+    ]);
 
     const finalName = `short_${stamp}.mp4`;
     const finalPath = path.join(OUTPUT_DIR, finalName);
     await run('ffmpeg', [
-      '-y', '-i', stitched, '-i', narrationPath,
-      '-vf', filters.join(','),
+      '-y', '-i', stitched, '-i', mixedAudio,
+      '-vf', filters.join(',') + ',vignette=PI/3.5',
       '-map', '0:v', '-map', '1:a',
       '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '24', '-threads', '1',
       '-c:a', 'aac', '-b:a', '160k',
@@ -260,9 +283,8 @@ async function buildShort() {
     const entry = {
       file: finalName,
       url: `${BASE_URL}/output/${finalName}`,
-      hook: fact.hook,
-      script: fact.script,
-      keywords: fact.keywords,
+      hook: story.hook,
+      script: fullScript,
       duration: Math.round(duration),
       createdAt: new Date().toISOString()
     };
@@ -280,18 +302,26 @@ async function buildShort() {
 
 let building = false;
 
-app.get('/make-short', async (req, res) => {
+const jobs = {}; // jobId -> { status, progress, entry, error }
+
+app.get('/make-short', (req, res) => {
   if (building) return res.status(429).json({ error: 'A video is already being built. Try again shortly.' });
   building = true;
-  try {
-    const entry = await buildShort();
-    res.json({ ok: true, ...entry });
-  } catch (err) {
-    console.error('Build failed:', err);
-    res.status(500).json({ ok: false, error: err.message });
-  } finally {
-    building = false;
-  }
+  const jobId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  jobs[jobId] = { status: 'processing', progress: 'Starting' };
+
+  buildShort(jobId)
+    .then(entry => { jobs[jobId] = { status: 'done', entry }; })
+    .catch(err => { console.error('Build failed:', err); jobs[jobId] = { status: 'error', error: err.message }; })
+    .finally(() => { building = false; });
+
+  res.json({ jobId });
+});
+
+app.get('/job/:id', (req, res) => {
+  const job = jobs[req.params.id];
+  if (!job) return res.status(404).json({ error: 'Unknown job' });
+  res.json(job);
 });
 
 app.get('/api/videos', (req, res) => res.json(readIndex()));
@@ -328,7 +358,37 @@ app.get('/', (req, res) => {
 </style></head><body>
 <h1>${CHANNEL_NAME} — Daily Shorts</h1>
 <p class="sub">A new short is generated automatically each day. Download and post.</p>
-<button onclick="this.textContent='Building… this takes 1-3 min';fetch('/make-short').then(r=>r.json()).then(()=>location.reload()).catch(()=>location.reload())">Make one now</button>
+<button id="makeBtn" onclick="startBuild()">Make one now</button>
+<p id="status" style="color:#888;font-size:13px;margin-top:10px"></p>
+<script>
+function startBuild(){
+  const btn = document.getElementById('makeBtn');
+  const status = document.getElementById('status');
+  btn.disabled = true;
+  btn.textContent = 'Starting…';
+  fetch('/make-short').then(r=>r.json()).then(data=>{
+    if (data.error) { status.textContent = data.error; btn.disabled=false; btn.textContent='Make one now'; return; }
+    poll(data.jobId);
+  }).catch(e=>{ status.textContent = 'Could not start: ' + e.message; btn.disabled=false; btn.textContent='Make one now'; });
+}
+function poll(jobId){
+  const btn = document.getElementById('makeBtn');
+  const status = document.getElementById('status');
+  fetch('/job/' + jobId).then(r=>r.json()).then(job=>{
+    if (job.status === 'processing') {
+      status.textContent = job.progress || 'Working…';
+      setTimeout(() => poll(jobId), 4000);
+    } else if (job.status === 'done') {
+      status.textContent = 'Done!';
+      location.reload();
+    } else {
+      status.textContent = 'Failed: ' + (job.error || 'unknown error');
+      btn.disabled = false;
+      btn.textContent = 'Make one now';
+    }
+  }).catch(()=>{ setTimeout(() => poll(jobId), 5000); });
+}
+</script>
 <div style="height:20px"></div>
 ${cards || '<p class="empty">No videos yet. Press “Make one now” to generate the first one.</p>'}
 </body></html>`);
