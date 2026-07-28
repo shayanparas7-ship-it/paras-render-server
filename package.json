@@ -1,0 +1,14 @@
+{
+  "name": "paras-render-server",
+  "version": "1.0.0",
+  "description": "Free ffmpeg-based render server for the Shayan Paras faceless YouTube pipeline",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "axios": "^1.7.2",
+    "uuid": "^9.0.1"
+  }
+}
