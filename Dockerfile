@@ -1,6 +1,5 @@
 FROM node:20-slim
 
-# ffmpeg is not included by default on most free hosts, so we install it here
 RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
