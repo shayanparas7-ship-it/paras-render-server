@@ -133,23 +133,59 @@ Respond with ONLY raw JSON, no markdown, no backticks:
 
 async function narrate(text, outPath) {
   const tts = new MsEdgeTTS();
-  await tts.setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-  const { audioStream } = await tts.toStream(text);
-  await new Promise((resolve, reject) => {
+  await tts.setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3, { wordBoundaryEnabled: true });
+  const { audioStream, metadataStream } = await tts.toStream(text);
+
+  const metaChunks = [];
+  const audioDone = new Promise((resolve, reject) => {
     const w = fs.createWriteStream(outPath);
     audioStream.pipe(w);
     w.on('finish', resolve);
     w.on('error', reject);
     audioStream.on('error', reject);
   });
-  return outPath;
+  const metaDone = new Promise((resolve) => {
+    if (!metadataStream) return resolve();
+    metadataStream.on('data', (c) => metaChunks.push(c));
+    metadataStream.on('end', resolve);
+    metadataStream.on('error', () => resolve());
+  });
+  await Promise.all([audioDone, metaDone]);
+
+  // Best-effort parse of real per-word timing. If the shape doesn't match what
+  // we expect, we return an empty array and the caller falls back to estimation
+  // rather than the whole build failing over a captions detail.
+  let wordTimings = [];
+  try {
+    const raw = Buffer.concat(metaChunks.map(c => (Buffer.isBuffer(c) ? c : Buffer.from(c)))).toString('utf8');
+    const objs = raw.split(/(?<=})(?=\{)/); // split back-to-back JSON objects if concatenated
+    for (const o of objs) {
+      if (!o.trim()) continue;
+      const parsed = JSON.parse(o);
+      const events = parsed.Metadata || (Array.isArray(parsed) ? parsed : [parsed]);
+      for (const ev of events) {
+        if (ev.Type === 'WordBoundary' && ev.Data) {
+          const startSec = ev.Data.Offset / 10000000;
+          const durSec = ev.Data.Duration / 10000000;
+          const word = ev.Data?.text?.Text || ev.Data?.Text || '';
+          if (word) wordTimings.push({ text: word, start: startSec, end: startSec + durSec });
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Word-boundary parse failed, will estimate captions instead:', e.message);
+    wordTimings = [];
+  }
+
+  return { outPath, wordTimings };
 }
 
 // ---------- 3. illustrated visuals ----------
 
 async function generateImage(prompt, destPath) {
-  const encoded = encodeURIComponent(prompt);
-  const url = `https://image.pollinations.ai/prompt/${encoded}?width=720&height=1280&nologo=true&seed=${Math.floor(Math.random() * 100000)}`;
+  const fullPrompt = `${prompt}, cinematic lighting, ultra detailed, high quality illustration, sharp focus`;
+  const encoded = encodeURIComponent(fullPrompt);
+  const url = `https://image.pollinations.ai/prompt/${encoded}?width=1080&height=1920&model=flux&enhance=true&nologo=true&seed=${Math.floor(Math.random() * 100000)}`;
   await download(url, destPath);
 }
 
@@ -177,6 +213,20 @@ function buildCaptionChunks(script, totalDuration, wordsPerChunk = 1) {
   return chunks;
 }
 
+// Preferred path: build caption chunks from the TTS engine's real per-word timings.
+function chunksFromWordTimings(wordTimings, wordsPerChunk = 3) {
+  const chunks = [];
+  for (let i = 0; i < wordTimings.length; i += wordsPerChunk) {
+    const group = wordTimings.slice(i, i + wordsPerChunk);
+    chunks.push({
+      text: group.map(w => w.text).join(' '),
+      start: group[0].start,
+      end: group[group.length - 1].end
+    });
+  }
+  return chunks;
+}
+
 // ---------- 5. build the video ----------
 
 async function buildShort(jobId) {
@@ -191,7 +241,7 @@ async function buildShort(jobId) {
 
     jobs[jobId].progress = 'Recording narration';
     const narrationPath = path.join(jobDir, 'narration.mp3');
-    await narrate(fullScript, narrationPath);
+    const { wordTimings } = await narrate(fullScript, narrationPath);
     const duration = await getDuration(narrationPath);
 
     // Time each beat's on-screen image proportionally to how much of the
@@ -215,10 +265,14 @@ async function buildShort(jobId) {
       const dur = Math.max(0.6, beatTimings[i].dur);
       const fps = 25;
       const frames = Math.max(1, Math.round(dur * fps));
-      const variant = i % 2;
-      const zoompan = variant === 0
-        ? `zoompan=z='min(zoom+0.0011,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=${fps}`
-        : `zoompan=z='if(lte(on,1),1.18,max(1.0,zoom-0.0011))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=${fps}`;
+      const variant = i % 4;
+      const zoompans = [
+        `zoompan=z='min(zoom+0.0011,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=${fps}`,
+        `zoompan=z='if(lte(on,1),1.18,max(1.0,zoom-0.0011))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=720x1280:fps=${fps}`,
+        `zoompan=z='1.16':x='if(lte(on,1),(iw-iw/1.16)/2,x+0.55)':y='(ih-ih/1.16)/2':d=${frames}:s=720x1280:fps=${fps}`,
+        `zoompan=z='1.16':x='if(lte(on,1),(iw-iw/1.16)/2,x-0.55)':y='(ih-ih/1.16)/2-0.3':d=${frames}:s=720x1280:fps=${fps}`
+      ];
+      const zoompan = zoompans[variant];
 
       const out = path.join(jobDir, `seg_${i}.mp4`);
       await run('ffmpeg', [
@@ -239,7 +293,11 @@ async function buildShort(jobId) {
 
     // captions: small, understated, sitting a little below center - never the focus
     jobs[jobId].progress = 'Adding captions';
-    const chunks = buildCaptionChunks(fullScript, duration, 3);
+    const expectedWords = fullScript.split(/\s+/).filter(Boolean).length;
+    const timingsUsable = wordTimings.length >= expectedWords * 0.7;
+    const chunks = timingsUsable
+      ? chunksFromWordTimings(wordTimings, 3)
+      : buildCaptionChunks(fullScript, duration, 3);
     const FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
     const filters = [];
 
