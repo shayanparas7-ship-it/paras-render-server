@@ -24,7 +24,7 @@ const VOICE = process.env.TTS_VOICE || 'en-US-AndrewNeural';
 
 function run(cmd, args) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 1024 * 1024 * 200 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { maxBuffer: 1024 * 1024 * 200, timeout: 120000 }, (err, stdout, stderr) => {
       if (err) return reject(new Error(stderr || err.message));
       resolve(stdout);
     });
@@ -131,53 +131,26 @@ Respond with ONLY raw JSON, no markdown, no backticks:
 
 // ---------- 2. narration ----------
 
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function narrate(text, outPath) {
   const tts = new MsEdgeTTS();
-  await tts.setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3, { wordBoundaryEnabled: true });
-  const { audioStream, metadataStream } = await tts.toStream(text);
-
-  const metaChunks = [];
-  const audioDone = new Promise((resolve, reject) => {
+  await tts.setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+  const { audioStream } = await tts.toStream(text);
+  await withTimeout(new Promise((resolve, reject) => {
     const w = fs.createWriteStream(outPath);
     audioStream.pipe(w);
     w.on('finish', resolve);
     w.on('error', reject);
     audioStream.on('error', reject);
-  });
-  const metaDone = new Promise((resolve) => {
-    if (!metadataStream) return resolve();
-    metadataStream.on('data', (c) => metaChunks.push(c));
-    metadataStream.on('end', resolve);
-    metadataStream.on('error', () => resolve());
-  });
-  await Promise.all([audioDone, metaDone]);
-
-  // Best-effort parse of real per-word timing. If the shape doesn't match what
-  // we expect, we return an empty array and the caller falls back to estimation
-  // rather than the whole build failing over a captions detail.
-  let wordTimings = [];
-  try {
-    const raw = Buffer.concat(metaChunks.map(c => (Buffer.isBuffer(c) ? c : Buffer.from(c)))).toString('utf8');
-    const objs = raw.split(/(?<=})(?=\{)/); // split back-to-back JSON objects if concatenated
-    for (const o of objs) {
-      if (!o.trim()) continue;
-      const parsed = JSON.parse(o);
-      const events = parsed.Metadata || (Array.isArray(parsed) ? parsed : [parsed]);
-      for (const ev of events) {
-        if (ev.Type === 'WordBoundary' && ev.Data) {
-          const startSec = ev.Data.Offset / 10000000;
-          const durSec = ev.Data.Duration / 10000000;
-          const word = ev.Data?.text?.Text || ev.Data?.Text || '';
-          if (word) wordTimings.push({ text: word, start: startSec, end: startSec + durSec });
-        }
-      }
-    }
-  } catch (e) {
-    console.error('Word-boundary parse failed, will estimate captions instead:', e.message);
-    wordTimings = [];
-  }
-
-  return { outPath, wordTimings };
+  }), 45000, 'Narration');
+  return { outPath, wordTimings: [] };
 }
 
 // ---------- 3. illustrated visuals ----------
