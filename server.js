@@ -158,7 +158,7 @@ async function narrate(text, outPath) {
 async function generateImage(prompt, destPath) {
   const fullPrompt = `${prompt}, cinematic lighting, ultra detailed, high quality illustration, sharp focus`;
   const encoded = encodeURIComponent(fullPrompt);
-  const url = `https://image.pollinations.ai/prompt/${encoded}?width=1080&height=1920&model=flux&enhance=true&nologo=true&seed=${Math.floor(Math.random() * 100000)}`;
+  const url = `https://image.pollinations.ai/prompt/${encoded}?width=768&height=1365&model=flux&enhance=true&nologo=true&seed=${Math.floor(Math.random() * 100000)}`;
   await download(url, destPath);
 }
 
@@ -250,7 +250,7 @@ async function buildShort(jobId) {
       const out = path.join(jobDir, `seg_${i}.mp4`);
       await run('ffmpeg', [
         '-y', '-loop', '1', '-i', imgPath,
-        '-vf', `scale=900:-1,${zoompan},eq=contrast=1.08:saturation=0.85:brightness=-0.03,format=yuv420p`,
+        '-vf', `scale=760:-1,${zoompan},eq=contrast=1.08:saturation=0.85:brightness=-0.03,format=yuv420p`,
         '-t', String(dur), '-r', String(fps),
         '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25', '-threads', '1',
         out
